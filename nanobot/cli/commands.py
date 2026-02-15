@@ -279,20 +279,28 @@ This file stores important information that should persist across sessions.
 
 
 def _make_provider(config):
-    """Create LiteLLMProvider from config. Exits if no API key found."""
-    from nanobot.providers.litellm_provider import LiteLLMProvider
+    """Create routed LLM provider from config. Exits if no API key found."""
+    from nanobot.providers.routed_provider import RoutedLLMProvider
+
     p = config.get_provider()
     model = config.agents.defaults.model
+    default_provider_name = config.get_provider_name(model) or config.get_provider_name()
     if not (p and p.api_key) and not model.startswith("bedrock/"):
         console.print("[red]Error: No API key configured.[/red]")
         console.print("Set one in ~/.nanobot/config.json under providers section")
         raise typer.Exit(1)
-    return LiteLLMProvider(
-        api_key=p.api_key if p else None,
-        api_base=config.get_api_base(),
+
+    routing_cfg = config.agents.routing
+    fallbacks = routing_cfg.fallbacks if routing_cfg.enabled else []
+    rules = routing_cfg.rules if routing_cfg.enabled else []
+
+    return RoutedLLMProvider(
+        config=config,
         default_model=model,
-        extra_headers=p.extra_headers if p else None,
-        provider_name=config.get_provider_name(),
+        default_provider_name=default_provider_name,
+        fallback_pairs=fallbacks,
+        rules=rules,
+        routing_enabled=routing_cfg.enabled,
     )
 
 
@@ -859,6 +867,40 @@ def status():
         from nanobot.providers.registry import PROVIDERS
 
         console.print(f"Model: {config.agents.defaults.model}")
+        default_provider = config.get_provider_name(config.agents.defaults.model) or config.get_provider_name()
+        console.print(f"Default route: {default_provider or 'unknown'}:{config.agents.defaults.model}")
+        if config.agents.routing.enabled:
+            seen: set[tuple[str, str]] = set()
+            chain: list[str] = []
+            if default_provider:
+                seen.add((default_provider, config.agents.defaults.model))
+                chain.append(f"{default_provider}:{config.agents.defaults.model}")
+            for fb in config.agents.routing.fallbacks:
+                key = (fb.provider, fb.model)
+                if key in seen:
+                    continue
+                seen.add(key)
+                chain.append(f"{fb.provider}:{fb.model}")
+            if chain:
+                console.print("Fallback chain:")
+                for i, item in enumerate(chain, start=1):
+                    console.print(f"  {i}. {item}")
+            else:
+                console.print("Fallback chain: [dim]none[/dim]")
+            if config.agents.routing.rules:
+                console.print("Routing rules:")
+                for i, rule in enumerate(config.agents.routing.rules, start=1):
+                    query_types = ", ".join(rule.query_types) if rule.query_types else "-"
+                    keywords = ", ".join(rule.keywords) if rule.keywords else "-"
+                    name = rule.name or f"{rule.provider}:{rule.model}"
+                    console.print(
+                        f"  {i}. {name} -> {rule.provider}:{rule.model} "
+                        f"(queryTypes={query_types}; keywords={keywords})"
+                    )
+            else:
+                console.print("Routing rules: [dim]none[/dim]")
+        else:
+            console.print("Model routing: [dim]disabled[/dim]")
         
         # Check API keys from registry
         for spec in PROVIDERS:

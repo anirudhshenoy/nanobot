@@ -22,6 +22,8 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
     cached_tokens: int = 0  # Cached prompt tokens from prompt caching
+    model: str | None = None
+    provider: str | None = None
     
     @property
     def has_tool_calls(self) -> bool:

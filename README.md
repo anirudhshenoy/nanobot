@@ -615,6 +615,46 @@ Config file: `~/.nanobot/config.json`
 | `zhipu` | LLM (Zhipu GLM) | [open.bigmodel.cn](https://open.bigmodel.cn) |
 | `vllm` | LLM (local, any OpenAI-compatible server) | — |
 
+### Model Routing + Fallbacks
+
+You can route queries to different model/provider pairs and configure explicit fallbacks:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-opus-4-5"
+    },
+    "routing": {
+      "enabled": true,
+      "fallbacks": [
+        { "provider": "openrouter", "model": "openai/gpt-4.1" },
+        { "provider": "anthropic", "model": "anthropic/claude-sonnet-4-5" }
+      ],
+      "rules": [
+        {
+          "name": "coding-tasks",
+          "queryTypes": ["coding"],
+          "keywords": ["debug", "refactor", "stack trace"],
+          "provider": "openrouter",
+          "model": "openai/gpt-4.1"
+        },
+        {
+          "name": "research-tasks",
+          "queryTypes": ["research"],
+          "provider": "anthropic",
+          "model": "anthropic/claude-opus-4-5"
+        }
+      ]
+    }
+  }
+}
+```
+
+- `rules` are matched in order (first match wins).
+- Matching uses either `queryTypes` or `keywords`.
+- If the selected target errors, nanobot retries with `fallbacks` in order.
+
 <details>
 <summary><b>Custom Provider (Any OpenAI-compatible API)</b></summary>
 

@@ -69,6 +69,16 @@ def _migrate_config(data: dict) -> dict:
     exec_cfg = tools.get("exec", {})
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
+
+    # Move top-level routing -> agents.routing
+    # Older/manual configs may place routing at root, but schema expects
+    # agents.routing.
+    if "routing" in data:
+        agents = data.get("agents", {})
+        if "routing" not in agents:
+            agents["routing"] = data["routing"]
+        data["agents"] = agents
+        data.pop("routing", None)
     return data
 
 

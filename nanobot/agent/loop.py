@@ -165,6 +165,8 @@ class AgentLoop:
         tools_used: list[str] = []
         token_usage: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0, "cached": 0}
         cost: float | None = None
+        last_model_used = self.model
+        last_provider_used = getattr(self.provider, "provider_name", None)
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -176,6 +178,10 @@ class AgentLoop:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
+            if response.model:
+                last_model_used = response.model
+            if response.provider:
+                last_provider_used = response.provider
 
             # Accumulate token usage across iterations
             if response.usage:
@@ -230,11 +236,10 @@ class AgentLoop:
                 "prompt": token_usage["prompt"],
                 "completion": token_usage["completion"],
                 "total": token_usage["total"],
-                "model": self.model,
+                "model": last_model_used,
             }
-            # Add provider name if available
-            if hasattr(self.provider, 'provider_name') and self.provider.provider_name:
-                token_data["provider"] = self.provider.provider_name
+            if last_provider_used:
+                token_data["provider"] = last_provider_used
             if token_usage["cached"] > 0:
                 token_data["cached_tokens"] = token_usage["cached"]
             if cost is not None:
@@ -322,7 +327,21 @@ class AgentLoop:
                                   content="New session started. Memory consolidation in progress.")
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands")
+                                  content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands\n/routing [optional query] — Show model routing and fallback info")
+        if cmd.startswith("/routing"):
+            query = msg.content.strip()[len("/routing"):].strip()
+            if hasattr(self.provider, "describe_routing"):
+                if query:
+                    content = self.provider.describe_routing(query)
+                else:
+                    content = self.provider.describe_routing()
+            else:
+                content = (
+                    "Model routing is not enabled.\n"
+                    f"Current model: {self.model}\n"
+                    "Configure agents.routing in ~/.nanobot/config.json to enable it."
+                )
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
         
         if len(session.messages) > self.memory_window:
             asyncio.create_task(self._consolidate_memory(session))

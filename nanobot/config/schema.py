@@ -165,9 +165,32 @@ class AgentDefaults(BaseModel):
     memory_window: int = 50
 
 
+class ModelProviderConfig(BaseModel):
+    """A model+provider pair used for routing and fallback."""
+    model: str
+    provider: str
+
+
+class RoutingRuleConfig(BaseModel):
+    """A query-routing rule that maps query traits to model+provider."""
+    name: str = ""
+    query_types: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    model: str
+    provider: str
+
+
+class ModelRoutingConfig(BaseModel):
+    """Model routing and fallback configuration."""
+    enabled: bool = True
+    fallbacks: list[ModelProviderConfig] = Field(default_factory=list)
+    rules: list[RoutingRuleConfig] = Field(default_factory=list)
+
+
 class AgentsConfig(BaseModel):
     """Agent configuration."""
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
 
 
 class ProviderConfig(BaseModel):
@@ -270,6 +293,10 @@ class Config(BaseSettings):
         p, _ = self._match_provider(model)
         return p
 
+    def get_provider_by_name(self, provider_name: str) -> ProviderConfig | None:
+        """Get provider config by explicit provider name from config."""
+        return getattr(self.providers, provider_name, None)
+
     def get_provider_name(self, model: str | None = None) -> str | None:
         """Get the registry name of the matched provider (e.g. "deepseek", "openrouter")."""
         _, name = self._match_provider(model)
@@ -293,6 +320,22 @@ class Config(BaseSettings):
             spec = find_by_name(name)
             if spec and spec.is_gateway and spec.default_api_base:
                 return spec.default_api_base
+        return None
+
+    def get_api_base_for_provider(self, provider_name: str, model: str | None = None) -> str | None:
+        """Get API base URL for an explicit provider name."""
+        from nanobot.providers.registry import find_by_name
+        p = self.get_provider_by_name(provider_name)
+        if p and p.api_base:
+            return p.api_base
+
+        spec = find_by_name(provider_name)
+        if spec and spec.default_api_base:
+            return spec.default_api_base
+
+        # Fallback to model-based matching if provider has no registry default.
+        if model:
+            return self.get_api_base(model)
         return None
     
     model_config = ConfigDict(
