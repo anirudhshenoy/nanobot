@@ -314,3 +314,98 @@ And `api_base` can be omitted because Kilo has a registry default.
 
 - `kilo` is registered before `zhipu`, so model names containing `z-ai` will resolve to Kilo first when both are configured.
 - Gateway detection still prioritizes explicit `provider_name`, ensuring stable routing when `providers.kilo` is selected.
+
+---
+
+# Cached Tokens, Model, and Provider Tracking (2026-02-15)
+
+## Goal
+Extend token tracking to include cached tokens (e.g., Anthropic prompt caching), model name, and provider name in session logs. This enables comprehensive cost analysis and debugging across different models and providers.
+
+## Why
+The existing token tracking implementation logged `prompt`, `completion`, `total`, and optionally `cost`, but was missing:
+- **Cached tokens**: Anthropic's prompt caching can significantly reduce costs, but savings weren't tracked
+- **Model information**: No way to know which model generated each response
+- **Provider information**: No way to track which provider was used (openrouter, anthropic, deepseek, etc.)
+
+This made it difficult to:
+- Analyze cost savings from prompt caching
+- Debug model-specific issues in conversation history
+- Track spending across different models and providers
+- Optimize model selection based on historical performance
+
+## What Changed
+
+### File: `nanobot/providers/base.py`
+
+#### Added `cached_tokens` field to `LLMResponse`
+- Added `cached_tokens: int = 0` field to track cached prompt tokens
+- Used by providers that support prompt caching (e.g., Anthropic)
+
+### File: `nanobot/providers/litellm_provider.py`
+
+#### 1. Store provider name
+- Added `self.provider_name = provider_name` in `__init__()`
+- Makes provider name accessible for session logging
+
+#### 2. Extract cached tokens from provider response
+- In `_parse_response()`, extract `cached_tokens` from `response.usage.prompt_tokens_details.cached_tokens`
+- Handles Anthropic's prompt caching response format
+- Passes `cached_tokens` to `LLMResponse` constructor
+
+### File: `nanobot/agent/loop.py`
+
+#### 1. Initialize cached token counter
+- Added `"cached": 0` to `token_usage` dictionary in `_run_agent_loop()`
+
+#### 2. Accumulate cached tokens across iterations
+- Added accumulation logic: `token_usage["cached"] += response.cached_tokens`
+- Tracks cached tokens across multiple LLM calls in tool-using conversations
+
+#### 3. Include model, provider, and cached_tokens in token_data
+- Added `"model": self.model` to token_data dict
+- Added `"provider": self.provider.provider_name` (when available)
+- Added `"cached_tokens": token_usage["cached"]` (when > 0)
+
+## Result
+
+Session files now include comprehensive token tracking with model, provider, and caching information:
+
+```jsonl
+{"_type": "metadata", "created_at": "2026-02-15T12:00:00", ...}
+{"role": "user", "content": "Hello", "timestamp": "2026-02-15T12:00:01"}
+{"role": "assistant", "content": "Hi there!", "timestamp": "2026-02-15T12:00:02", "tokens": {
+  "prompt": 12,
+  "completion": 5,
+  "total": 17,
+  "model": "anthropic/claude-opus-4-5",
+  "provider": "openrouter"
+}}
+{"role": "user", "content": "Search for Python tips", "timestamp": "..."}
+{"role": "assistant", "content": "Here are some tips...", "timestamp": "...", "tools_used": ["web_search"], "tokens": {
+  "prompt": 245,
+  "completion": 890,
+  "total": 1135,
+  "model": "anthropic/claude-opus-4-5",
+  "provider": "openrouter",
+  "cached_tokens": 120,
+  "cost": 0.0012
+}}
+```
+
+## Benefits
+
+1. **Cost analysis**: Combine model + tokens + cost + cached_tokens for accurate billing analysis
+2. **Caching savings**: Track how much Anthropic prompt caching saves on each message
+3. **Model tracking**: Know which model generated each response
+4. **Provider tracking**: Track which provider was used for each response
+5. **Debugging**: Identify model-specific or provider-specific issues in conversation history
+6. **Multi-model workflows**: Track performance when switching between different models
+7. **Optimization**: Make data-driven decisions about model selection based on historical usage
+
+## Notes
+
+- **Backward compatible**: Old session files without these fields continue to work normally
+- **Optional fields**: `provider` only added if available, `cached_tokens` only added when > 0
+- **Multi-call accumulation**: Cached tokens are accumulated across all LLM calls in a single message
+- **No breaking changes**: All changes are additive, using existing `**kwargs` pattern in `session.add_message()`

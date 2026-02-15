@@ -163,7 +163,7 @@ class AgentLoop:
         iteration = 0
         final_content = None
         tools_used: list[str] = []
-        token_usage: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0}
+        token_usage: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0, "cached": 0}
         cost: float | None = None
 
         while iteration < self.max_iterations:
@@ -188,6 +188,10 @@ class AgentLoop:
                         cost = response.usage.get("cost")
                     elif "total_cost" in response.usage:
                         cost = response.usage.get("total_cost")
+            
+            # Accumulate cached tokens (e.g., Anthropic prompt caching)
+            if response.cached_tokens:
+                token_usage["cached"] += response.cached_tokens
 
             if response.has_tool_calls:
                 tool_call_dicts = [
@@ -226,7 +230,13 @@ class AgentLoop:
                 "prompt": token_usage["prompt"],
                 "completion": token_usage["completion"],
                 "total": token_usage["total"],
+                "model": self.model,
             }
+            # Add provider name if available
+            if hasattr(self.provider, 'provider_name') and self.provider.provider_name:
+                token_data["provider"] = self.provider.provider_name
+            if token_usage["cached"] > 0:
+                token_data["cached_tokens"] = token_usage["cached"]
             if cost is not None:
                 token_data["cost"] = cost
 

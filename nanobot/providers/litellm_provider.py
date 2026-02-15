@@ -32,6 +32,7 @@ class LiteLLMProvider(LLMProvider):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+        self.provider_name = provider_name
         
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
@@ -190,6 +191,11 @@ class LiteLLMProvider(LLMProvider):
                 "total_tokens": response.usage.total_tokens,
             }
         
+        # Extract cached prompt tokens if available (e.g., Anthropic prompt caching)
+        cached_tokens = 0
+        if hasattr(response, "usage") and response.usage and hasattr(response.usage, "prompt_tokens_details"):
+            cached_tokens = getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+        
         reasoning_content = getattr(message, "reasoning_content", None)
         
         return LLMResponse(
@@ -198,6 +204,7 @@ class LiteLLMProvider(LLMProvider):
             finish_reason=choice.finish_reason or "stop",
             usage=usage,
             reasoning_content=reasoning_content,
+            cached_tokens=cached_tokens,
         )
     
     def get_default_model(self) -> str:
