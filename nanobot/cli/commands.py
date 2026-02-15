@@ -292,14 +292,14 @@ def _make_provider(config):
 
     routing_cfg = config.agents.routing
     fallbacks = routing_cfg.fallbacks if routing_cfg.enabled else []
-    rules = routing_cfg.rules if routing_cfg.enabled else []
 
     return RoutedLLMProvider(
         config=config,
         default_model=model,
         default_provider_name=default_provider_name,
         fallback_pairs=fallbacks,
-        rules=rules,
+        scoring_config=routing_cfg.scoring,
+        tier_targets=routing_cfg.tiers,
         routing_enabled=routing_cfg.enabled,
     )
 

@@ -86,7 +86,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         env_key="OPENROUTER_API_KEY",
         display_name="OpenRouter",
         litellm_prefix="openrouter",        # claude-3 → openrouter/claude-3
-        skip_prefixes=(),
+        skip_prefixes=('minimax/'),
         env_extras=(),
         is_gateway=True,
         is_local=False,
@@ -121,7 +121,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # Keep model path segments (e.g. "z-ai/glm-5:free"), so don't strip.
     ProviderSpec(
         name="kilo",
-        keywords=("kilo", "z-ai"),
+        keywords=("kilo", "z-ai", 'minimax/'),
         env_key="OPENAI_API_KEY",
         display_name="Kilo AI",
         litellm_prefix="openai",            # z-ai/glm-5:free → openai/z-ai/glm-5:free

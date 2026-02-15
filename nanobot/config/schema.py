@@ -171,20 +171,117 @@ class ModelProviderConfig(BaseModel):
     provider: str
 
 
-class RoutingRuleConfig(BaseModel):
-    """A query-routing rule that maps query traits to model+provider."""
-    name: str = ""
-    query_types: list[str] = Field(default_factory=list)
-    keywords: list[str] = Field(default_factory=list)
-    model: str
-    provider: str
+class TokenCountThresholdsConfig(BaseModel):
+    """Token threshold config for weighted scoring."""
+    simple: int = 400
+    complex: int = 2500
+
+
+class TierBoundariesConfig(BaseModel):
+    """Weighted score boundaries between tiers."""
+    simple_medium: float = -0.1
+    medium_complex: float = 0.15
+    complex_reasoning: float = 0.4
+
+
+class RoutingScoringConfig(BaseModel):
+    """Weighted scoring parameters (ported from the v2 classifier)."""
+    token_count_thresholds: TokenCountThresholdsConfig = Field(default_factory=TokenCountThresholdsConfig)
+
+    code_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "code", "function", "class", "api", "debug", "bug", "error", "stack trace",
+            "python", "javascript", "typescript", "sql", "refactor",
+        ]
+    )
+    reasoning_keywords: list[str] = Field(
+        default_factory=lambda: ["reason", "step by step", "prove", "analyze", "compare", "why"]
+    )
+    simple_keywords: list[str] = Field(
+        default_factory=lambda: ["quick", "brief", "simple", "short answer", "tldr"]
+    )
+    technical_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "architecture", "distributed", "latency", "throughput", "protocol",
+            "complexity", "optimization", "tradeoff",
+        ]
+    )
+    creative_keywords: list[str] = Field(
+        default_factory=lambda: ["story", "poem", "creative", "brainstorm", "rewrite", "tone"]
+    )
+
+    imperative_verbs: list[str] = Field(
+        default_factory=lambda: ["build", "implement", "design", "create", "generate", "optimize"]
+    )
+    constraint_indicators: list[str] = Field(
+        default_factory=lambda: ["must", "should", "cannot", "don't", "without", "under", "limit", "constraint"]
+    )
+    output_format_keywords: list[str] = Field(
+        default_factory=lambda: ["json", "table", "markdown", "yaml", "csv", "bullet points", "format"]
+    )
+    reference_keywords: list[str] = Field(
+        default_factory=lambda: ["cite", "reference", "source", "link", "paper", "documentation"]
+    )
+    negation_keywords: list[str] = Field(
+        default_factory=lambda: ["not", "never", "avoid", "exclude", "without"]
+    )
+    domain_specific_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "kubernetes", "terraform", "postgres", "redis", "pydantic", "litellm",
+            "oauth", "grpc", "cuda", "vector database",
+        ]
+    )
+    agentic_task_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "plan", "execute", "iterate", "multi-step", "autonomous", "workflow",
+            "orchestrate", "tool call", "agent",
+        ]
+    )
+
+    dimension_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "tokenCount": 0.08,
+            "codePresence": 0.14,
+            "reasoningMarkers": 0.14,
+            "technicalTerms": 0.08,
+            "creativeMarkers": 0.04,
+            "simpleIndicators": 0.16,
+            "multiStepPatterns": 0.06,
+            "questionComplexity": 0.05,
+            "imperativeVerbs": 0.05,
+            "constraintCount": 0.05,
+            "outputFormat": 0.04,
+            "referenceComplexity": 0.03,
+            "negationComplexity": 0.03,
+            "domainSpecificity": 0.05,
+            "agenticTask": 0.10,
+        }
+    )
+    tier_boundaries: TierBoundariesConfig = Field(default_factory=TierBoundariesConfig)
+    confidence_steepness: float = 5.0
+    confidence_threshold: float = 0.62
+
+
+class RoutingTierTargetConfig(BaseModel):
+    """Primary+fallback routing targets for one tier."""
+    primary: ModelProviderConfig
+    fallback: list[ModelProviderConfig] = Field(default_factory=list)
+
+
+class RoutingTiersConfig(BaseModel):
+    """Tier-to-target mapping."""
+    simple: RoutingTierTargetConfig | None = None
+    medium: RoutingTierTargetConfig | None = None
+    complex: RoutingTierTargetConfig | None = None
+    reasoning: RoutingTierTargetConfig | None = None
 
 
 class ModelRoutingConfig(BaseModel):
     """Model routing and fallback configuration."""
     enabled: bool = True
     fallbacks: list[ModelProviderConfig] = Field(default_factory=list)
-    rules: list[RoutingRuleConfig] = Field(default_factory=list)
+    scoring: RoutingScoringConfig = Field(default_factory=RoutingScoringConfig)
+    tiers: RoutingTiersConfig = Field(default_factory=RoutingTiersConfig)
 
 
 class AgentsConfig(BaseModel):
