@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from duckduckgo_search import DDGS
 
 from nanobot.agent.tools.base import Tool
 
@@ -44,7 +45,7 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 
 class WebSearchTool(Tool):
-    """Search the web using Brave Search API."""
+    """Search the web with fallback: Brave → Tavily → DuckDuckGo."""
     
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets."
@@ -57,21 +58,40 @@ class WebSearchTool(Tool):
         "required": ["query"]
     }
     
-    def __init__(self, api_key: str | None = None, max_results: int = 5):
-        self.api_key = api_key or os.environ.get("BRAVE_API_KEY", "")
+    def __init__(self, brave_api_key: str | None = None, tavily_api_key: str | None = None, max_results: int = 5):
+        self.brave_api_key = brave_api_key or os.environ.get("BRAVE_API_KEY", "")
+        self.tavily_api_key = tavily_api_key or os.environ.get("TAVILY_API_KEY", "")
         self.max_results = max_results
     
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
-        if not self.api_key:
+        """Execute search with fallback chain: Brave → Tavily → DuckDuckGo."""
+        n = min(max(count or self.max_results, 1), 10)
+        
+        # Try Brave first
+        result = await self._search_brave(query, n)
+        if not result.startswith("Error:"):
+            return result
+        
+        # Fallback to Tavily
+        result = await self._search_tavily(query, n)
+        if not result.startswith("Error:"):
+            return result
+        
+        # Final fallback to DuckDuckGo (no API key required)
+        result = await self._search_duckduckgo(query, n)
+        return result
+    
+    async def _search_brave(self, query: str, count: int) -> str:
+        """Search using Brave Search API."""
+        if not self.brave_api_key:
             return "Error: BRAVE_API_KEY not configured"
         
         try:
-            n = min(max(count or self.max_results, 1), 10)
             async with httpx.AsyncClient() as client:
                 r = await client.get(
                     "https://api.search.brave.com/res/v1/web/search",
-                    params={"q": query, "count": n},
-                    headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
+                    params={"q": query, "count": count},
+                    headers={"Accept": "application/json", "X-Subscription-Token": self.brave_api_key},
                     timeout=10.0
                 )
                 r.raise_for_status()
@@ -80,14 +100,64 @@ class WebSearchTool(Tool):
             if not results:
                 return f"No results for: {query}"
             
-            lines = [f"Results for: {query}\n"]
-            for i, item in enumerate(results[:n], 1):
-                lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
-                if desc := item.get("description"):
-                    lines.append(f"   {desc}")
-            return "\n".join(lines)
+            return self._format_results(query, results[:count], "Brave")
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: Brave search failed: {e}"
+    
+    async def _search_tavily(self, query: str, count: int) -> str:
+        """Search using Tavily API."""
+        if not self.tavily_api_key:
+            return "Error: TAVILY_API_KEY not configured"
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": self.tavily_api_key,
+                        "query": query,
+                        "max_results": count,
+                        "include_answer": False,
+                    },
+                    timeout=10.0
+                )
+                r.raise_for_status()
+            
+            results = r.json().get("results", [])
+            if not results:
+                return f"No results for: {query}"
+            
+            # Normalize Tavily results to match Brave format
+            normalized = [{"title": item.get("title", ""), "url": item.get("url", ""), 
+                          "description": item.get("content", "")} for item in results]
+            return self._format_results(query, normalized[:count], "Tavily")
+        except Exception as e:
+            return f"Error: Tavily search failed: {e}"
+    
+    async def _search_duckduckgo(self, query: str, count: int) -> str:
+        """Search using DuckDuckGo (no API key required)."""
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=count))
+            
+            if not results:
+                return f"No results for: {query}"
+            
+            # Normalize DuckDuckGo results to match Brave format
+            normalized = [{"title": item.get("title", ""), "url": item.get("href", ""),
+                          "description": item.get("body", "")} for item in results]
+            return self._format_results(query, normalized[:count], "DuckDuckGo")
+        except Exception as e:
+            return f"Error: DuckDuckGo search failed: {e}"
+    
+    def _format_results(self, query: str, results: list[dict], engine: str) -> str:
+        """Format search results consistently."""
+        lines = [f"Results for: {query} [{engine}]\n"]
+        for i, item in enumerate(results, 1):
+            lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
+            if desc := item.get("description"):
+                lines.append(f"   {desc}")
+        return "\n".join(lines)
 
 
 class WebFetchTool(Tool):

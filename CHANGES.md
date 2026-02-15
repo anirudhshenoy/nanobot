@@ -1,5 +1,51 @@
 # Developer Workflow Guide
 
+## Web Search Fallback Chain (2026-02-15)
+
+### Goal
+Add resilient web search with automatic fallback when any search engine fails.
+
+### Why
+Previously, `web_search` relied solely on Brave Search API. If the API key was missing, rate-limited, or returned any error, the tool would fail with no alternatives.
+
+### What Changed
+
+#### File: `nanobot/agent/tools/web.py`
+
+- **Added dependency**: `duckduckgo-search>=8.0.0` for free, no-API-key search
+- **Refactored `WebSearchTool`** to support fallback chain:
+  - `_search_brave()` — Brave Search API (requires `BRAVE_API_KEY`)
+  - `_search_tavily()` — Tavily API (requires `TAVILY_API_KEY`)
+  - `_search_duckduckgo()` — DuckDuckGo (no API key, always available)
+- **Fallback logic**: Try each engine in order; on *any* error, fall back to next
+- **Result attribution**: Output now shows which engine was used: `Results for: query [Brave]`
+
+#### File: `pyproject.toml`
+
+- Added `duckduckgo-search>=8.0.0` to dependencies
+
+### Result
+
+```python
+# With BRAVE_API_KEY set:
+Results for: Python async tutorial [Brave]
+
+# If Brave fails (rate limit, timeout, etc.):
+Results for: Python async tutorial [Tavily]
+
+# If both Brave and Tavily fail or lack keys:
+Results for: Python async tutorial [DuckDuckGo]
+```
+
+### Notes
+
+- **No breaking changes**: Existing `BRAVE_API_KEY` configuration continues to work
+- **New env var support**: `TAVILY_API_KEY` enables Tavily as first fallback
+- **Always works**: DuckDuckGo requires no API key, ensuring search never completely fails
+- **Graceful degradation**: Each engine failure logs the error and tries the next
+
+---
+
 ## Telegram Message Chunking Fix (2026-02-15)
 
 ### Goal
@@ -161,3 +207,65 @@ Session files now include token data per message:
 - **Cost is optional**: Only stored if the provider returns it (currently OpenRouter). Other providers will have `tokens` but no `cost` field.
 - **Backward compatible**: Old sessions without token data continue to work normally.
 - **No breaking changes**: The `add_message()` method already accepts arbitrary kwargs (`**kwargs`), so passing `tokens=` requires no changes to `SessionManager`.
+
+---
+
+# Kilo Provider Changes
+
+## Goal
+Add first-class support for Kilo AI as an OpenAI-compatible gateway provider so users can configure it directly (without relying on `custom`).
+
+## Why
+Kilo AI exposes a chat completions endpoint at:
+- `https://api.kilo.ai/api/gateway/chat/completions`
+
+The model naming can include path-like segments (for example `z-ai/glm-5:free`), so provider routing must preserve those model names.
+
+## What Changed
+
+### File: `nanobot/providers/registry.py`
+
+#### 1. Added new provider spec: `kilo`
+- **Provider type**: gateway (`is_gateway=True`)
+- **Display name**: `Kilo AI`
+- **Auth env key**: `OPENAI_API_KEY` (OpenAI-compatible)
+- **LiteLLM prefix**: `openai`
+- **Auto-detect by base**: `detect_by_base_keyword="kilo.ai"`
+- **Default API base**: `https://api.kilo.ai/api/gateway`
+- **Model handling**: `strip_model_prefix=False` to preserve models like `z-ai/glm-5:free`
+
+#### 2. Added matching keywords
+- `keywords=("kilo", "z-ai")` to help model-based provider matching when `kilo` is configured.
+
+### File: `nanobot/config/schema.py`
+
+#### 1. Extended `ProvidersConfig`
+- Added `kilo: ProviderConfig = Field(default_factory=ProviderConfig)`.
+- Enables config via `providers.kilo` in `~/.nanobot/config.json`.
+
+## Result
+
+Users can now configure Kilo directly:
+
+```json
+{
+  "providers": {
+    "kilo": {
+      "api_key": "KILO_API_KEY",
+      "api_base": "https://api.kilo.ai/api/gateway"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "z-ai/glm-5:free"
+    }
+  }
+}
+```
+
+And `api_base` can be omitted because Kilo has a registry default.
+
+## Notes
+
+- `kilo` is registered before `zhipu`, so model names containing `z-ai` will resolve to Kilo first when both are configured.
+- Gateway detection still prioritizes explicit `provider_name`, ensuring stable routing when `providers.kilo` is selected.
