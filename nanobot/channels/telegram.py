@@ -14,6 +14,9 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import TelegramConfig
 
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+TELEGRAM_SAFE_CHUNK_LENGTH = 3500
+
 
 def _markdown_to_telegram_html(text: str) -> str:
     """
@@ -76,6 +79,34 @@ def _markdown_to_telegram_html(text: str) -> str:
         text = text.replace(f"\x00CB{i}\x00", f"<pre><code>{escaped}</code></pre>")
     
     return text
+
+
+def _split_text_for_telegram(text: str, max_len: int) -> list[str]:
+    """Split text into chunks within max_len, preferring paragraph/line boundaries."""
+    if not text:
+        return [""]
+    if max_len <= 0:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > max_len:
+        split_at = remaining.rfind("\n\n", 0, max_len)
+        if split_at == -1:
+            split_at = remaining.rfind("\n", 0, max_len)
+        if split_at == -1:
+            split_at = remaining.rfind(" ", 0, max_len)
+        if split_at == -1 or split_at < max_len // 2:
+            split_at = max_len
+
+        chunk = remaining[:split_at].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].lstrip()
+
+    if remaining:
+        chunks.append(remaining)
+    return chunks or [text]
 
 
 class TelegramChannel(BaseChannel):
@@ -188,27 +219,53 @@ class TelegramChannel(BaseChannel):
         self._stop_typing(msg.chat_id)
         
         try:
-            # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.chat_id)
-            # Convert markdown to Telegram HTML
-            html_content = _markdown_to_telegram_html(msg.content)
+        except ValueError:
+            logger.error(f"Invalid chat_id: {msg.chat_id}")
+            return
+
+        content_chunks = _split_text_for_telegram(msg.content, TELEGRAM_SAFE_CHUNK_LENGTH)
+        for chunk in content_chunks:
+            if not chunk:
+                continue
+            await self._send_chunk(chat_id, chunk)
+
+    async def _send_chunk(self, chat_id: int, content: str) -> None:
+        """Send one chunk, with HTML first and plain text fallback."""
+        if not self._app:
+            return
+
+        html_content = _markdown_to_telegram_html(content)
+
+        # If HTML rendering expands content too much, send as plain text chunks.
+        if len(html_content) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            for plain_chunk in _split_text_for_telegram(content, TELEGRAM_MAX_MESSAGE_LENGTH):
+                if not plain_chunk:
+                    continue
+                await self._send_plain(chat_id, plain_chunk)
+            return
+
+        try:
             await self._app.bot.send_message(
                 chat_id=chat_id,
                 text=html_content,
                 parse_mode="HTML"
             )
-        except ValueError:
-            logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
-            # Fallback to plain text if HTML parsing fails
             logger.warning(f"HTML parse failed, falling back to plain text: {e}")
-            try:
-                await self._app.bot.send_message(
-                    chat_id=int(msg.chat_id),
-                    text=msg.content
-                )
-            except Exception as e2:
-                logger.error(f"Error sending Telegram message: {e2}")
+            for plain_chunk in _split_text_for_telegram(content, TELEGRAM_MAX_MESSAGE_LENGTH):
+                if not plain_chunk:
+                    continue
+                await self._send_plain(chat_id, plain_chunk)
+
+    async def _send_plain(self, chat_id: int, text: str) -> None:
+        """Send plain text with final hard-split protection."""
+        if not self._app:
+            return
+        try:
+            await self._app.bot.send_message(chat_id=chat_id, text=text[:TELEGRAM_MAX_MESSAGE_LENGTH])
+        except Exception as e:
+            logger.error(f"Error sending Telegram message: {e}")
     
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""

@@ -1,5 +1,31 @@
 # Developer Workflow Guide
 
+## Telegram Message Chunking Fix (2026-02-15)
+
+### Goal
+Prevent Telegram send failures when assistant responses exceed Telegram's message size limit.
+
+### What Changed
+
+### File: `nanobot/channels/telegram.py`
+
+- Added chunking constants for Telegram message limits:
+  - `TELEGRAM_MAX_MESSAGE_LENGTH = 4096`
+  - `TELEGRAM_SAFE_CHUNK_LENGTH = 3500`
+- Added `_split_text_for_telegram()` to split large responses on paragraph/newline/space boundaries, with hard-split fallback.
+- Updated `send()` to split long outbound responses and send each chunk sequentially.
+- Added `_send_chunk()`:
+  - Attempts HTML send first for each chunk.
+  - Falls back to plain text for that chunk if HTML send fails.
+- Added `_send_plain()` with final hard cap protection.
+
+### Result
+
+Long Telegram responses are now delivered as multiple messages instead of failing with:
+- `Message is too long`
+
+This keeps markdown-to-HTML formatting where possible and degrades gracefully to plain text when needed.
+
 ## Git Workflow for nanobot Fork
 
 This guide explains how to make changes, commit them, and sync with upstream.
