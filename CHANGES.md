@@ -1,77 +1,5 @@
 # Developer Workflow Guide
 
-## Web Search Fallback Chain (2026-02-15)
-
-### Goal
-Add resilient web search with automatic fallback when any search engine fails.
-
-### Why
-Previously, `web_search` relied solely on Brave Search API. If the API key was missing, rate-limited, or returned any error, the tool would fail with no alternatives.
-
-### What Changed
-
-#### File: `nanobot/agent/tools/web.py`
-
-- **Added dependency**: `duckduckgo-search>=8.0.0` for free, no-API-key search
-- **Refactored `WebSearchTool`** to support fallback chain:
-  - `_search_brave()` — Brave Search API (requires `BRAVE_API_KEY`)
-  - `_search_tavily()` — Tavily API (requires `TAVILY_API_KEY`)
-  - `_search_duckduckgo()` — DuckDuckGo (no API key, always available)
-- **Fallback logic**: Try each engine in order; on *any* error, fall back to next
-- **Result attribution**: Output now shows which engine was used: `Results for: query [Brave]`
-
-#### File: `pyproject.toml`
-
-- Added `duckduckgo-search>=8.0.0` to dependencies
-
-### Result
-
-```python
-# With BRAVE_API_KEY set:
-Results for: Python async tutorial [Brave]
-
-# If Brave fails (rate limit, timeout, etc.):
-Results for: Python async tutorial [Tavily]
-
-# If both Brave and Tavily fail or lack keys:
-Results for: Python async tutorial [DuckDuckGo]
-```
-
-### Notes
-
-- **No breaking changes**: Existing `BRAVE_API_KEY` configuration continues to work
-- **New env var support**: `TAVILY_API_KEY` enables Tavily as first fallback
-- **Always works**: DuckDuckGo requires no API key, ensuring search never completely fails
-- **Graceful degradation**: Each engine failure logs the error and tries the next
-
----
-
-## Telegram Message Chunking Fix (2026-02-15)
-
-### Goal
-Prevent Telegram send failures when assistant responses exceed Telegram's message size limit.
-
-### What Changed
-
-### File: `nanobot/channels/telegram.py`
-
-- Added chunking constants for Telegram message limits:
-  - `TELEGRAM_MAX_MESSAGE_LENGTH = 4096`
-  - `TELEGRAM_SAFE_CHUNK_LENGTH = 3500`
-- Added `_split_text_for_telegram()` to split large responses on paragraph/newline/space boundaries, with hard-split fallback.
-- Updated `send()` to split long outbound responses and send each chunk sequentially.
-- Added `_send_chunk()`:
-  - Attempts HTML send first for each chunk.
-  - Falls back to plain text for that chunk if HTML send fails.
-- Added `_send_plain()` with final hard cap protection.
-
-### Result
-
-Long Telegram responses are now delivered as multiple messages instead of failing with:
-- `Message is too long`
-
-This keeps markdown-to-HTML formatting where possible and degrades gracefully to plain text when needed.
-
 ## Git Workflow for nanobot Fork
 
 This guide explains how to make changes, commit them, and sync with upstream.
@@ -103,6 +31,8 @@ git push origin feature/my-awesome-feature
 ```
 
 ### After Making Changes (Quick Reference)
+
+Always document your changes in this file (changes.md), by appending at the bottom. Clearly mention the goal, the why and the what changed for the changes you're making.
 
 ```bash
 # Check what changed
@@ -159,6 +89,121 @@ uv tool upgrade nanobot-ai
 ```
 
 ---
+
+
+
+## Web Search Fallback Chain (2026-02-15)
+
+### Goal
+Add resilient web search with automatic fallback when any search engine fails, and support configuring API keys via config file.
+
+### Why
+Previously, `web_search` relied solely on Brave Search API. If the API key was missing, rate-limited, or returned any error, the tool would fail with no alternatives. Additionally, Tavily API key could only be set via environment variable, not through the config file.
+
+### What Changed
+
+#### File: `nanobot/agent/tools/web.py`
+
+- **Added dependency**: `duckduckgo-search>=8.0.0` for free, no-API-key search
+- **Refactored `WebSearchTool`** to support fallback chain:
+  - `_search_brave()` — Brave Search API (requires `BRAVE_API_KEY`)
+  - `_search_tavily()` — Tavily API (requires `TAVILY_API_KEY`)
+  - `_search_duckduckgo()` — DuckDuckGo (no API key, always available)
+- **Fallback logic**: Try each engine in order; on *any* error, fall back to next
+- **Result attribution**: Output now shows which engine was used: `Results for: query [Brave]`
+
+#### File: `nanobot/config/schema.py`
+
+- Added `tavily_api_key` field to `WebSearchConfig` for config file support
+
+#### File: `nanobot/cli/commands.py`
+
+- Updated `gateway()` and `agent()` commands to pass `tavily_api_key` from config to `AgentLoop`
+
+#### File: `nanobot/agent/loop.py`
+
+- Added `tavily_api_key` parameter to `AgentLoop.__init__()`
+- Passes `tavily_api_key` to `SubagentManager` and `WebSearchTool`
+
+#### File: `nanobot/agent/subagent.py`
+
+- Added `tavily_api_key` parameter to `SubagentManager.__init__()`
+- Passes `tavily_api_key` to `WebSearchTool`
+
+#### File: `pyproject.toml`
+
+- Added `duckduckgo-search>=8.0.0` to dependencies
+
+### Result
+
+```python
+# With BRAVE_API_KEY set:
+Results for: Python async tutorial [Brave]
+
+# If Brave fails (rate limit, timeout, etc.):
+Results for: Python async tutorial [Tavily]
+
+# If both Brave and Tavily fail or lack keys:
+Results for: Python async tutorial [DuckDuckGo]
+```
+
+### Configuration
+
+API keys can now be set in `~/.nanobot/config.json`:
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "api_key": "your-brave-api-key",
+        "tavily_api_key": "your-tavily-api-key",
+        "max_results": 5
+      }
+    }
+  }
+}
+```
+
+Or via environment variables:
+- `BRAVE_API_KEY` — Brave Search API key
+- `TAVILY_API_KEY` — Tavily API key
+
+### Notes
+
+- **No breaking changes**: Existing `BRAVE_API_KEY` configuration continues to work
+- **Always works**: DuckDuckGo requires no API key, ensuring search never completely fails
+- **Graceful degradation**: Each engine failure logs the error and tries the next
+- **Config file priority**: Keys in config file take precedence over environment variables
+
+---
+
+## Telegram Message Chunking Fix (2026-02-15)
+
+### Goal
+Prevent Telegram send failures when assistant responses exceed Telegram's message size limit.
+
+### What Changed
+
+### File: `nanobot/channels/telegram.py`
+
+- Added chunking constants for Telegram message limits:
+  - `TELEGRAM_MAX_MESSAGE_LENGTH = 4096`
+  - `TELEGRAM_SAFE_CHUNK_LENGTH = 3500`
+- Added `_split_text_for_telegram()` to split large responses on paragraph/newline/space boundaries, with hard-split fallback.
+- Updated `send()` to split long outbound responses and send each chunk sequentially.
+- Added `_send_chunk()`:
+  - Attempts HTML send first for each chunk.
+  - Falls back to plain text for that chunk if HTML send fails.
+- Added `_send_plain()` with final hard cap protection.
+
+### Result
+
+Long Telegram responses are now delivered as multiple messages instead of failing with:
+- `Message is too long`
+
+This keeps markdown-to-HTML formatting where possible and degrades gracefully to plain text when needed.
+
 
 # Token Tracking Changes
 
