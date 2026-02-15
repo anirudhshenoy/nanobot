@@ -117,6 +117,25 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
     ),
 
+    # Kilo AI gateway: OpenAI-compatible endpoint at /api/gateway/chat/completions.
+    # Keep model path segments (e.g. "z-ai/glm-5:free"), so don't strip.
+    ProviderSpec(
+        name="kilo",
+        keywords=("kilo", "z-ai"),
+        env_key="OPENAI_API_KEY",
+        display_name="Kilo AI",
+        litellm_prefix="openai",            # z-ai/glm-5:free → openai/z-ai/glm-5:free
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=True,
+        is_local=False,
+        detect_by_key_prefix="",
+        detect_by_base_keyword="kilo.ai",
+        default_api_base="https://api.kilo.ai/api/gateway",
+        strip_model_prefix=False,
+        model_overrides=(),
+    ),
+
     # === Standard providers (matched by model-name keywords) ===============
 
     # Anthropic: LiteLLM recognizes "claude-*" natively, no prefix needed.
@@ -200,7 +219,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         env_key="ZAI_API_KEY",
         display_name="Zhipu AI",
         litellm_prefix="zai",              # glm-4 → zai/glm-4
-        skip_prefixes=("zhipu/", "zai/", "openrouter/", "hosted_vllm/"),
+        skip_prefixes=("zhipu/", "zai/", "openrouter/", "hosted_vllm/", "z-ai"),
         env_extras=(
             ("ZHIPUAI_API_KEY", "{api_key}"),
         ),
