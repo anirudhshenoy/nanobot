@@ -15,6 +15,7 @@ from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
+from nanobot.utils.helpers import ensure_dir, get_sessions_path, timestamp
 
 
 class SubagentManager:
@@ -51,6 +52,7 @@ class SubagentManager:
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
+        self._subagent_sessions_dir = ensure_dir(get_sessions_path() / "subagents")
     
     async def spawn(
         self,
@@ -78,6 +80,16 @@ class SubagentManager:
             "channel": origin_channel,
             "chat_id": origin_chat_id,
         }
+        self._log_subagent_event(
+            task_id,
+            {
+                "event": "spawned",
+                "label": display_label,
+                "task": task,
+                "origin": origin,
+                "model": self.model,
+            },
+        )
         
         # Create background task
         bg_task = asyncio.create_task(
@@ -100,6 +112,7 @@ class SubagentManager:
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info(f"Subagent [{task_id}] starting task: {label}")
+        self._log_subagent_event(task_id, {"event": "started", "label": label, "task": task})
         
         try:
             # Build subagent tools (no message tool, no spawn tool)
@@ -128,6 +141,8 @@ class SubagentManager:
             max_iterations = 15
             iteration = 0
             final_result: str | None = None
+            token_usage: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0, "cached": 0}
+            total_cost: float = 0.0
             
             while iteration < max_iterations:
                 iteration += 1
@@ -139,8 +154,45 @@ class SubagentManager:
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                 )
+                llm_usage: dict[str, Any] = {"event": "llm_usage", "iteration": iteration}
+                has_usage_data = False
+                if response.usage:
+                    prompt_tokens = response.usage.get("prompt_tokens", 0)
+                    completion_tokens = response.usage.get("completion_tokens", 0)
+                    total_tokens = response.usage.get("total_tokens", 0)
+                    token_usage["prompt"] += prompt_tokens
+                    token_usage["completion"] += completion_tokens
+                    token_usage["total"] += total_tokens
+                    llm_usage["prompt_tokens"] = prompt_tokens
+                    llm_usage["completion_tokens"] = completion_tokens
+                    llm_usage["total_tokens"] = total_tokens
+                    has_usage_data = True
+
+                    step_cost = response.usage.get("cost")
+                    if step_cost is None:
+                        step_cost = response.usage.get("total_cost")
+                    if isinstance(step_cost, (int, float)):
+                        total_cost += float(step_cost)
+                        llm_usage["cost"] = float(step_cost)
+
+                if response.cached_tokens:
+                    token_usage["cached"] += response.cached_tokens
+                    llm_usage["cached_tokens"] = response.cached_tokens
+                    has_usage_data = True
+
+                if has_usage_data:
+                    self._log_subagent_event(task_id, llm_usage)
                 
                 if response.has_tool_calls:
+                    self._log_subagent_event(
+                        task_id,
+                        {
+                            "event": "assistant_tool_calls",
+                            "iteration": iteration,
+                            "content": response.content or "",
+                            "tool_count": len(response.tool_calls),
+                        },
+                    )
                     # Add assistant message with tool calls
                     tool_call_dicts = [
                         {
@@ -163,7 +215,25 @@ class SubagentManager:
                     for tool_call in response.tool_calls:
                         args_str = json.dumps(tool_call.arguments)
                         logger.debug(f"Subagent [{task_id}] executing: {tool_call.name} with arguments: {args_str}")
+                        self._log_subagent_event(
+                            task_id,
+                            {
+                                "event": "tool_call",
+                                "iteration": iteration,
+                                "tool": tool_call.name,
+                                "arguments": tool_call.arguments,
+                            },
+                        )
                         result = await tools.execute(tool_call.name, tool_call.arguments)
+                        self._log_subagent_event(
+                            task_id,
+                            {
+                                "event": "tool_result",
+                                "iteration": iteration,
+                                "tool": tool_call.name,
+                                "result": result,
+                            },
+                        )
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
@@ -172,17 +242,46 @@ class SubagentManager:
                         })
                 else:
                     final_result = response.content
+                    self._log_subagent_event(
+                        task_id,
+                        {
+                            "event": "final_response",
+                            "iteration": iteration,
+                            "content": final_result or "",
+                        },
+                    )
                     break
             
             if final_result is None:
                 final_result = "Task completed but no final response was generated."
             
             logger.info(f"Subagent [{task_id}] completed successfully")
+            token_summary = self._build_token_summary(token_usage, total_cost)
+            self._log_subagent_event(
+                task_id,
+                {
+                    "event": "completed",
+                    "status": "ok",
+                    "final_result": final_result,
+                    **({"tokens": token_summary} if token_summary else {}),
+                },
+            )
             await self._announce_result(task_id, label, task, final_result, origin, "ok")
             
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.error(f"Subagent [{task_id}] failed: {e}")
+            token_summary = self._build_token_summary(token_usage, total_cost) if "token_usage" in locals() else None
+            self._log_subagent_event(
+                task_id,
+                {
+                    "event": "completed",
+                    "status": "error",
+                    "error": str(e),
+                    "result": error_msg,
+                    **({"tokens": token_summary} if token_summary else {}),
+                },
+            )
             await self._announce_result(task_id, label, task, error_msg, origin, "error")
     
     async def _announce_result(
@@ -204,7 +303,7 @@ Task: {task}
 Result:
 {result}
 
-Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not mention technical details like "subagent" or task IDs."""
+Summarize this naturally for the user. Keep it brief (1-2 sentences). """
         
         # Inject as system message to trigger main agent
         msg = InboundMessage(
@@ -216,6 +315,14 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         
         await self.bus.publish_inbound(msg)
         logger.debug(f"Subagent [{task_id}] announced result to {origin['channel']}:{origin['chat_id']}")
+        self._log_subagent_event(
+            task_id,
+            {
+                "event": "announced",
+                "status": status,
+                "target": f"{origin['channel']}:{origin['chat_id']}",
+            },
+        )
     
     def _build_subagent_prompt(self, task: str) -> str:
         """Build a focused system prompt for the subagent."""
@@ -257,3 +364,32 @@ When you have completed the task, provide a clear summary of your findings or ac
     def get_running_count(self) -> int:
         """Return the number of currently running subagents."""
         return len(self._running_tasks)
+
+    def _get_subagent_log_path(self, task_id: str) -> Path:
+        """Return the JSONL log path for a subagent run."""
+        return self._subagent_sessions_dir / f"subagent_{task_id}.jsonl"
+
+    def _log_subagent_event(self, task_id: str, payload: dict[str, Any]) -> None:
+        """Append a subagent lifecycle/tool event to persistent JSONL logs."""
+        entry = {"timestamp": timestamp(), "task_id": task_id, **payload}
+        try:
+            path = self._get_subagent_log_path(task_id)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning(f"Subagent [{task_id}] log write failed: {e}")
+
+    def _build_token_summary(self, token_usage: dict[str, int], total_cost: float) -> dict[str, Any] | None:
+        """Build a compact token/cost summary for subagent logs."""
+        if token_usage["total"] <= 0 and token_usage["cached"] <= 0 and total_cost <= 0:
+            return None
+        summary: dict[str, Any] = {
+            "prompt": token_usage["prompt"],
+            "completion": token_usage["completion"],
+            "total": token_usage["total"],
+        }
+        if token_usage["cached"] > 0:
+            summary["cached_tokens"] = token_usage["cached"]
+        if total_cost > 0:
+            summary["cost"] = total_cost
+        return summary
