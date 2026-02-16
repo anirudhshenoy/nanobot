@@ -164,7 +164,7 @@ class AgentLoop:
         final_content = None
         tools_used: list[str] = []
         token_usage: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0, "cached": 0}
-        cost: float | None = None
+        cost: float = 0.0
         last_model_used = self.model
         last_provider_used = getattr(self.provider, "provider_name", None)
 
@@ -188,12 +188,12 @@ class AgentLoop:
                 token_usage["prompt"] += response.usage.get("prompt_tokens", 0)
                 token_usage["completion"] += response.usage.get("completion_tokens", 0)
                 token_usage["total"] += response.usage.get("total_tokens", 0)
-                # Capture cost if provider returns it (e.g., OpenRouter)
-                if cost is None:
-                    if "cost" in response.usage:
-                        cost = response.usage.get("cost")
-                    elif "total_cost" in response.usage:
-                        cost = response.usage.get("total_cost")
+                # Accumulate cost across iterations when provider exposes it.
+                step_cost = response.usage.get("cost")
+                if step_cost is None:
+                    step_cost = response.usage.get("total_cost")
+                if isinstance(step_cost, (int, float)):
+                    cost += float(step_cost)
             
             # Accumulate cached tokens (e.g., Anthropic prompt caching)
             if response.cached_tokens:
@@ -231,7 +231,7 @@ class AgentLoop:
 
         # Build token data dict if we have any usage
         token_data: dict[str, Any] | None = None
-        if token_usage["total"] > 0:
+        if token_usage["total"] > 0 or cost > 0:
             token_data = {
                 "prompt": token_usage["prompt"],
                 "completion": token_usage["completion"],
@@ -242,7 +242,7 @@ class AgentLoop:
                 token_data["provider"] = last_provider_used
             if token_usage["cached"] > 0:
                 token_data["cached_tokens"] = token_usage["cached"]
-            if cost is not None:
+            if cost > 0:
                 token_data["cost"] = cost
 
         return final_content, tools_used, token_data
@@ -313,18 +313,24 @@ class AgentLoop:
         if cmd == "/new":
             # Capture messages before clearing (avoid race condition with background task)
             messages_to_archive = session.messages.copy()
-            session.clear()
+            session_key_to_reset = session.key
+            # Persist latest state, then rotate active JSONL into archive.
             self.sessions.save(session)
-            self.sessions.invalidate(session.key)
+            archive_path = self.sessions.archive_session_file(session_key_to_reset)
+            self.sessions.reset_session(session_key_to_reset)
 
             async def _consolidate_and_cleanup():
-                temp_session = Session(key=session.key)
+                temp_session = Session(key=session_key_to_reset)
                 temp_session.messages = messages_to_archive
                 await self._consolidate_memory(temp_session, archive_all=True)
 
             asyncio.create_task(_consolidate_and_cleanup())
-            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="New session started. Memory consolidation in progress.")
+            archive_msg = f" Previous session archived at: {archive_path}" if archive_path else ""
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"New session started. Memory consolidation in progress.{archive_msg}",
+            )
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands\n/routing [optional query] — Show model routing and fallback info")

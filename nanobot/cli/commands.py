@@ -887,18 +887,6 @@ def status():
                     console.print(f"  {i}. {item}")
             else:
                 console.print("Fallback chain: [dim]none[/dim]")
-            if config.agents.routing.rules:
-                console.print("Routing rules:")
-                for i, rule in enumerate(config.agents.routing.rules, start=1):
-                    query_types = ", ".join(rule.query_types) if rule.query_types else "-"
-                    keywords = ", ".join(rule.keywords) if rule.keywords else "-"
-                    name = rule.name or f"{rule.provider}:{rule.model}"
-                    console.print(
-                        f"  {i}. {name} -> {rule.provider}:{rule.model} "
-                        f"(queryTypes={query_types}; keywords={keywords})"
-                    )
-            else:
-                console.print("Routing rules: [dim]none[/dim]")
         else:
             console.print("Model routing: [dim]disabled[/dim]")
         
