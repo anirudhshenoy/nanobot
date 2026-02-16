@@ -5,6 +5,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 
@@ -62,12 +63,20 @@ class SessionManager:
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self.sessions_dir = ensure_dir(Path.home() / ".nanobot" / "sessions")
+        self.archive_dir = ensure_dir(self.sessions_dir / "archive")
         self._cache: dict[str, Session] = {}
     
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.sessions_dir / f"{safe_key}.jsonl"
+
+    def _get_archive_session_path(self, key: str) -> Path:
+        """Get an archive path for a rotated session."""
+        safe_key = safe_filename(key.replace(":", "_"))
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        suffix = uuid4().hex[:8]
+        return self.archive_dir / f"{safe_key}__{ts}__{suffix}.jsonl"
     
     def get_or_create(self, key: str) -> Session:
         """
@@ -149,6 +158,28 @@ class SessionManager:
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
+
+    def archive_session_file(self, key: str) -> Path | None:
+        """
+        Rotate the active session file into archive storage.
+
+        Returns the new archive path if a file existed, otherwise None.
+        """
+        source = self._get_session_path(key)
+        if not source.exists():
+            self.invalidate(key)
+            return None
+
+        target = self._get_archive_session_path(key)
+        source.rename(target)
+        self.invalidate(key)
+        return target
+
+    def reset_session(self, key: str) -> Session:
+        """Create a fresh empty active session for the key and persist it."""
+        session = Session(key=key)
+        self.save(session)
+        return session
     
     def list_sessions(self) -> list[dict[str, Any]]:
         """

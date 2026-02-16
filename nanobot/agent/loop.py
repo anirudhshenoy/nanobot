@@ -313,18 +313,24 @@ class AgentLoop:
         if cmd == "/new":
             # Capture messages before clearing (avoid race condition with background task)
             messages_to_archive = session.messages.copy()
-            session.clear()
+            session_key_to_reset = session.key
+            # Persist latest state, then rotate active JSONL into archive.
             self.sessions.save(session)
-            self.sessions.invalidate(session.key)
+            archive_path = self.sessions.archive_session_file(session_key_to_reset)
+            self.sessions.reset_session(session_key_to_reset)
 
             async def _consolidate_and_cleanup():
-                temp_session = Session(key=session.key)
+                temp_session = Session(key=session_key_to_reset)
                 temp_session.messages = messages_to_archive
                 await self._consolidate_memory(temp_session, archive_all=True)
 
             asyncio.create_task(_consolidate_and_cleanup())
-            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="New session started. Memory consolidation in progress.")
+            archive_msg = f" Previous session archived at: {archive_path}" if archive_path else ""
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"New session started. Memory consolidation in progress.{archive_msg}",
+            )
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands\n/routing [optional query] — Show model routing and fallback info")
