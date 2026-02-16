@@ -195,6 +195,20 @@ class LiteLLMProvider(LLMProvider):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
             }
+            # Cost can be exposed by some providers/adapters as usage.cost or usage.total_cost.
+            usage_cost = getattr(response.usage, "cost", None)
+            usage_total_cost = getattr(response.usage, "total_cost", None)
+            if usage_cost is not None:
+                usage["cost"] = usage_cost
+            elif usage_total_cost is not None:
+                usage["total_cost"] = usage_total_cost
+
+        # LiteLLM may expose normalized response cost under hidden params.
+        hidden_params = getattr(response, "_hidden_params", None)
+        if isinstance(hidden_params, dict):
+            response_cost = hidden_params.get("response_cost")
+            if response_cost is not None and "cost" not in usage and "total_cost" not in usage:
+                usage["cost"] = response_cost
         
         # Extract cached prompt tokens if available (e.g., Anthropic prompt caching)
         cached_tokens = 0
