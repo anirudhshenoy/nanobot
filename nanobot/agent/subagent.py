@@ -100,7 +100,7 @@ class SubagentManager:
         # Cleanup when done
         bg_task.add_done_callback(lambda _: self._running_tasks.pop(task_id, None))
         
-        logger.info(f"Spawned subagent [{task_id}]: {display_label}")
+        logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
     
     async def _run_subagent(
@@ -111,17 +111,17 @@ class SubagentManager:
         origin: dict[str, str],
     ) -> None:
         """Execute the subagent task and announce the result."""
-        logger.info(f"Subagent [{task_id}] starting task: {label}")
+        logger.info("Subagent [{}] starting task: {}", task_id, label)
         self._log_subagent_event(task_id, {"event": "started", "label": label, "task": task})
         
         try:
             # Build subagent tools (no message tool, no spawn tool)
             tools = ToolRegistry()
             allowed_dir = self.workspace if self.restrict_to_workspace else None
-            tools.register(ReadFileTool(allowed_dir=allowed_dir))
-            tools.register(WriteFileTool(allowed_dir=allowed_dir))
-            tools.register(EditFileTool(allowed_dir=allowed_dir))
-            tools.register(ListDirTool(allowed_dir=allowed_dir))
+            tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir))
             tools.register(ExecTool(
                 working_dir=str(self.workspace),
                 timeout=self.exec_config.timeout,
@@ -200,7 +200,7 @@ class SubagentManager:
                             "type": "function",
                             "function": {
                                 "name": tc.name,
-                                "arguments": json.dumps(tc.arguments),
+                                "arguments": json.dumps(tc.arguments, ensure_ascii=False),
                             },
                         }
                         for tc in response.tool_calls
@@ -213,8 +213,8 @@ class SubagentManager:
                     
                     # Execute tools
                     for tool_call in response.tool_calls:
-                        args_str = json.dumps(tool_call.arguments)
-                        logger.debug(f"Subagent [{task_id}] executing: {tool_call.name} with arguments: {args_str}")
+                        args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                        logger.debug("Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str)
                         self._log_subagent_event(
                             task_id,
                             {
@@ -255,7 +255,7 @@ class SubagentManager:
             if final_result is None:
                 final_result = "Task completed but no final response was generated."
             
-            logger.info(f"Subagent [{task_id}] completed successfully")
+            logger.info("Subagent [{}] completed successfully", task_id)
             token_summary = self._build_token_summary(token_usage, total_cost)
             self._log_subagent_event(
                 task_id,
@@ -270,7 +270,7 @@ class SubagentManager:
             
         except Exception as e:
             error_msg = f"Error: {str(e)}"
-            logger.error(f"Subagent [{task_id}] failed: {e}")
+            logger.error("Subagent [{}] failed: {}", task_id, e)
             token_summary = self._build_token_summary(token_usage, total_cost) if "token_usage" in locals() else None
             self._log_subagent_event(
                 task_id,
@@ -314,7 +314,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). """
         )
         
         await self.bus.publish_inbound(msg)
-        logger.debug(f"Subagent [{task_id}] announced result to {origin['channel']}:{origin['chat_id']}")
+        logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin['channel'], origin['chat_id'])
         self._log_subagent_event(
             task_id,
             {
