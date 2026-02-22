@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Two-layer memory system with grep-based recall.
+description: Two-layer memory system with QMD-powered semantic search across memory and learning collections.
 always: true
 ---
 
@@ -9,15 +9,45 @@ always: true
 ## Structure
 
 - `memory/MEMORY.md` — Long-term facts (preferences, project context, relationships). Always loaded into your context.
-- `memory/HISTORY.md` — Append-only event log. NOT loaded into context. Search it with grep.
+- `memory/HISTORY.md` — Append-only event log. NOT loaded in context. Search via QMD.
+- `learning/` — Additional indexed notes and learnings.
 
-## Search Past Events
+## Search Memory (QMD)
+
+Primary method — relevance-ranked search across all indexed collections:
 
 ```bash
-grep -i "keyword" memory/HISTORY.md
+qmd search "keyword"
 ```
 
-Use the `exec` tool to run grep. Combine patterns: `grep -iE "meeting|deadline" memory/HISTORY.md`
+Search specific collection:
+```bash
+qmd search "keyword" -c memory
+qmd search "keyword" -c learning
+```
+
+Get specific file:
+```bash
+qmd get qmd://memory/memory.md
+```
+
+## Fallback: Exact Pattern Matching (grep)
+
+For exact matches or regex patterns, use grep directly:
+
+```bash
+grep -i "exact phrase" memory/HISTORY.md
+grep -iE "meeting|deadline" memory/HISTORY.md
+```
+
+## When to Use Which
+
+| Use QMD | Use grep |
+|---------|----------|
+| Exploratory search | Exact phrase matching |
+| Multiple keywords | Regex patterns |
+| Relevance ranking | Specific file search |
+| Cross-collection | Case-sensitive needs |
 
 ## When to Update MEMORY.md
 
@@ -29,3 +59,12 @@ Write important facts immediately using `edit_file` or `write_file`:
 ## Auto-consolidation
 
 Old conversations are automatically summarized and appended to HISTORY.md when the session grows large. Long-term facts are extracted to MEMORY.md. You don't need to manage this.
+
+## Indexing
+
+Collections are pre-indexed with QMD. To re-index after adding new files:
+
+```bash
+qmd index memory memory/
+qmd index learning learning/
+```
