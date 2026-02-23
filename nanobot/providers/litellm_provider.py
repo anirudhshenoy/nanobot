@@ -197,7 +197,7 @@ class LiteLLMProvider(LLMProvider):
         
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": self._sanitize_messages(messages),
+            "messages": self._sanitize_messages(self._sanitize_empty_content(messages)),
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -282,7 +282,7 @@ class LiteLLMProvider(LLMProvider):
         if hasattr(response, "usage") and response.usage and hasattr(response.usage, "prompt_tokens_details"):
             cached_tokens = getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
         
-        reasoning_content = getattr(message, "reasoning_content", None)
+        reasoning_content = getattr(message, "reasoning_content", None) or None
         
         return LLMResponse(
             content=message.content,
