@@ -33,7 +33,7 @@ list_dir(path: str) -> str
 ### exec
 Execute a shell command and return output.
 ```
-exec(command: str, working_dir: str = None) -> str
+exec(command: str, working_dir: str = None, timeout: int = 60) -> str
 ```
 
 **Safety Notes:**
