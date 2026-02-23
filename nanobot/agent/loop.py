@@ -53,6 +53,7 @@ class AgentLoop:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         memory_window: int = 50,
+        memory_consolidation: bool = False,
         brave_api_key: str | None = None,
         tavily_api_key: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -70,6 +71,7 @@ class AgentLoop:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.memory_window = memory_window
+        self.memory_consolidation = memory_consolidation
         self.brave_api_key = brave_api_key
         self.tavily_api_key = tavily_api_key
         self.exec_config = exec_config or ExecToolConfig()
@@ -385,7 +387,7 @@ class AgentLoop:
                 )
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
 
-        if len(session.messages) > self.memory_window and session.key not in self._consolidating:
+        if self.memory_consolidation and len(session.messages) > self.memory_window and session.key not in self._consolidating:
             self._consolidating.add(session.key)
 
             async def _consolidate_and_unlock():
