@@ -53,6 +53,7 @@ class AgentLoop:
         temperature: float = 0.1,
         max_tokens: int = 4096,
         memory_window: int = 100,
+        memory_consolidation: bool = False,
         brave_api_key: str | None = None,
         tavily_api_key: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -72,6 +73,7 @@ class AgentLoop:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.memory_window = memory_window
+        self.memory_consolidation = memory_consolidation
         self.brave_api_key = brave_api_key
         self.tavily_api_key = tavily_api_key
         self.exec_config = exec_config or ExecToolConfig()
@@ -178,8 +180,8 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
-    ) -> tuple[str | None, list[str], list[dict]]:
-        """Run the agent iteration loop. Returns (final_content, tools_used, messages)."""
+    ) -> tuple[str | None, list[str], list[dict], dict[str, Any] | None]:
+        """Run the agent iteration loop. Returns (final_content, tools_used, messages, token_data)."""
         messages = initial_messages
         iteration = 0
         final_content = None
@@ -262,7 +264,22 @@ class AgentLoop:
                 "without completing the task. You can try breaking the task into smaller steps."
             )
 
-        return final_content, tools_used, messages
+        token_data: dict[str, Any] | None = None
+        if token_usage["total"] > 0 or cost > 0:
+            token_data = {
+                "prompt": token_usage["prompt"],
+                "completion": token_usage["completion"],
+                "total": token_usage["total"],
+                "model": last_model_used,
+            }
+            if last_provider_used:
+                token_data["provider"] = last_provider_used
+            if token_usage["cached"] > 0:
+                token_data["cached_tokens"] = token_usage["cached"]
+            if cost > 0:
+                token_data["cost"] = cost
+
+        return final_content, tools_used, messages, token_data
 
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -340,8 +357,8 @@ class AgentLoop:
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
             )
-            final_content, _, all_msgs = await self._run_agent_loop(messages)
-            self._save_turn(session, all_msgs, 1 + len(history))
+            final_content, _, all_msgs, token_data = await self._run_agent_loop(messages)
+            self._save_turn(session, all_msgs, 1 + len(history), token_data=token_data)
             self.sessions.save(session)
             return OutboundMessage(channel=channel, chat_id=chat_id,
                                   content=final_content or "Background task completed.")
@@ -378,11 +395,14 @@ class AgentLoop:
                 self._consolidating.discard(session.key)
                 self._prune_consolidation_lock(session.key, lock)
 
+            self.sessions.save(session)
+            archive_path = self.sessions.archive_session_file(session.key)
             session.clear()
             self.sessions.save(session)
             self.sessions.invalidate(session.key)
+            archive_msg = f" Previous session archived at: {archive_path}" if archive_path else ""
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="New session started.")
+                                  content=f"New session started.{archive_msg}")
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands\n/routing [optional query] — Show model routing and fallback info")
@@ -402,7 +422,7 @@ class AgentLoop:
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
 
         unconsolidated = len(session.messages) - session.last_consolidated
-        if (unconsolidated >= self.memory_window and session.key not in self._consolidating):
+        if (self.memory_consolidation and unconsolidated >= self.memory_window and session.key not in self._consolidating):
             self._consolidating.add(session.key)
             lock = self._get_consolidation_lock(session.key)
 
@@ -441,7 +461,7 @@ class AgentLoop:
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))
 
-        final_content, _, all_msgs = await self._run_agent_loop(
+        final_content, _, all_msgs, token_data = await self._run_agent_loop(
             initial_messages, on_progress=on_progress or _bus_progress,
         )
 
@@ -451,7 +471,7 @@ class AgentLoop:
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
-        self._save_turn(session, all_msgs, 1 + len(history))
+        self._save_turn(session, all_msgs, 1 + len(history), token_data=token_data)
         self.sessions.save(session)
 
         if message_tool := self.tools.get("message"):
@@ -465,7 +485,10 @@ class AgentLoop:
 
     _TOOL_RESULT_MAX_CHARS = 500
 
-    def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
+    def _save_turn(
+        self, session: Session, messages: list[dict], skip: int,
+        *, token_data: dict[str, Any] | None = None,
+    ) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         from datetime import datetime
         for m in messages[skip:]:
@@ -476,6 +499,11 @@ class AgentLoop:
                     entry["content"] = content[:self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
+        if token_data:
+            for msg in reversed(session.messages):
+                if msg.get("role") == "assistant":
+                    msg["tokens"] = token_data
+                    break
         session.updated_at = datetime.now()
 
     async def _consolidate_memory(self, session, archive_all: bool = False) -> bool:
