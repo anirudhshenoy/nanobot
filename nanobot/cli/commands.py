@@ -237,8 +237,14 @@ def _make_provider(config: Config):
     from nanobot.providers.registry import find_by_name
 
     model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
+    explicit_provider = (config.agents.defaults.provider or "").strip().replace("-", "_")
+    provider_name = explicit_provider or config.get_provider_name(model)
+    p = config.get_provider_by_name(provider_name) if provider_name else config.get_provider(model)
+
+    if explicit_provider and find_by_name(explicit_provider) is None:
+        console.print(f"[red]Error: Unknown provider '{config.agents.defaults.provider}'.[/red]")
+        console.print("Use one of the provider keys in ~/.nanobot/config.json under providers.")
+        raise typer.Exit(1)
 
     # OpenAI Codex (OAuth)
     if provider_name == "openai_codex" or model.startswith("openai-codex/"):
@@ -248,7 +254,7 @@ def _make_provider(config: Config):
     if provider_name == "custom":
         return CustomProvider(
             api_key=p.api_key if p else "no-key",
-            api_base=config.get_api_base(model) or "http://localhost:8000/v1",
+            api_base=config.get_api_base_for_provider(provider_name, model) or "http://localhost:8000/v1",
             default_model=model,
         )
 
@@ -1030,7 +1036,8 @@ def status():
         from nanobot.providers.registry import PROVIDERS
 
         console.print(f"Model: {config.agents.defaults.model}")
-        default_provider = config.get_provider_name(config.agents.defaults.model) or config.get_provider_name()
+        explicit_provider = (config.agents.defaults.provider or "").strip().replace("-", "_")
+        default_provider = explicit_provider or config.get_provider_name(config.agents.defaults.model) or config.get_provider_name()
         console.print(f"Default route: {default_provider or 'unknown'}:{config.agents.defaults.model}")
         if config.agents.routing.enabled:
             seen: set[tuple[str, str]] = set()

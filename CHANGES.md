@@ -614,3 +614,33 @@ confidence = 1 / (1 + exp(-5.0 × distance_from_boundary))
 - `nanobot/channels/telegram.py`: Added `/routing` command
 - `nanobot/cli/commands.py`: Wire routed provider, add routing to status
 - `nanobot/config/loader.py`: Config migration for `routing` placement
+
+## Explicit Default Provider Override (2026-02-25)
+
+### Goal
+Allow users to force the default provider for `agents.defaults.model` without relying on model-name keyword matching.
+
+### Why
+Provider auto-matching is keyword-based (for example, `glm` maps to `zhipu`), which can incorrectly route requests away from `providers.custom` for OpenAI-compatible local/cloud endpoints.
+
+### What Changed
+
+#### File: `nanobot/config/schema.py`
+
+- Added `agents.defaults.provider` as an optional explicit provider override.
+- Added provider-name normalization (`openai-codex` and `openai_codex` both work).
+- Updated provider matching so `defaults.provider` wins when resolving the default model.
+- Updated explicit provider lookup helpers to normalize provider names.
+
+#### File: `nanobot/cli/commands.py`
+
+- Updated provider creation flow to honor `agents.defaults.provider` before keyword-based matching.
+- Added clear error message for unknown explicit provider names.
+- Fixed `CustomProvider` base URL selection to use explicit provider base resolution.
+- Updated `nanobot status` to display explicit default provider route when configured.
+
+#### File: `README.md`
+
+- Updated Custom Provider example to include:
+  - `agents.defaults.provider: "custom"`
+- Added note explaining when explicit provider is recommended.

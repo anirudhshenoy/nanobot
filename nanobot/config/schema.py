@@ -186,6 +186,7 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.nanobot/workspace"
     model: str = "anthropic/claude-opus-4-5"
+    provider: str | None = None  # Optional explicit provider override for defaults.model
     max_tokens: int = 8192
     temperature: float = 0.1
     max_tool_iterations: int = 40
@@ -411,6 +412,14 @@ class Config(BaseSettings):
         """Get expanded workspace path."""
         return Path(self.agents.defaults.workspace).expanduser()
 
+    @staticmethod
+    def _normalize_provider_name(provider_name: str | None) -> str | None:
+        """Normalize provider identifiers like `openai-codex` -> `openai_codex`."""
+        if not provider_name:
+            return None
+        name = provider_name.strip().lower().replace("-", "_")
+        return name or None
+
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
         from nanobot.providers.registry import PROVIDERS
@@ -419,6 +428,14 @@ class Config(BaseSettings):
         model_normalized = model_lower.replace("-", "_")
         model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
         normalized_prefix = model_prefix.replace("-", "_")
+        default_model = self.agents.defaults.model.lower()
+        explicit_default_provider = self._normalize_provider_name(self.agents.defaults.provider)
+
+        # Explicit defaults.provider wins for defaults.model resolution.
+        if explicit_default_provider and (model is None or model_lower == default_model):
+            p = getattr(self.providers, explicit_default_provider, None)
+            if p is not None:
+                return p, explicit_default_provider
 
         def _kw_matches(kw: str) -> bool:
             kw = kw.lower()
@@ -455,7 +472,10 @@ class Config(BaseSettings):
 
     def get_provider_by_name(self, provider_name: str) -> ProviderConfig | None:
         """Get provider config by explicit provider name from config."""
-        return getattr(self.providers, provider_name, None)
+        normalized = self._normalize_provider_name(provider_name)
+        if not normalized:
+            return None
+        return getattr(self.providers, normalized, None)
 
     def get_provider_name(self, model: str | None = None) -> str | None:
         """Get the registry name of the matched provider (e.g. "deepseek", "openrouter")."""
@@ -486,11 +506,15 @@ class Config(BaseSettings):
     def get_api_base_for_provider(self, provider_name: str, model: str | None = None) -> str | None:
         """Get API base URL for an explicit provider name."""
         from nanobot.providers.registry import find_by_name
-        p = self.get_provider_by_name(provider_name)
+        normalized = self._normalize_provider_name(provider_name)
+        if not normalized:
+            return None
+
+        p = self.get_provider_by_name(normalized)
         if p and p.api_base:
             return p.api_base
 
-        spec = find_by_name(provider_name)
+        spec = find_by_name(normalized)
         if spec and spec.default_api_base:
             return spec.default_api_base
 

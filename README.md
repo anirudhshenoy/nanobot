@@ -689,6 +689,7 @@ Connects directly to any OpenAI-compatible endpoint — LM Studio, llama.cpp, To
   },
   "agents": {
     "defaults": {
+      "provider": "custom",
       "model": "your-model-name"
     }
   }
@@ -696,6 +697,7 @@ Connects directly to any OpenAI-compatible endpoint — LM Studio, llama.cpp, To
 ```
 
 > For local servers that don't require a key, set `apiKey` to any non-empty string (e.g. `"no-key"`).
+> Set `agents.defaults.provider` when your model name could match another provider by keyword (for example, `glm-*`).
 
 </details>
 
