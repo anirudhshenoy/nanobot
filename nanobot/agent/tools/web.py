@@ -62,25 +62,21 @@ class WebSearchTool(Tool):
         self.brave_api_key = brave_api_key or os.environ.get("BRAVE_API_KEY", "")
         self.tavily_api_key = tavily_api_key or os.environ.get("TAVILY_API_KEY", "")
         self.max_results = max_results
-    
+
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         """Execute search with fallback chain: Brave → Tavily → DuckDuckGo."""
         n = min(max(count or self.max_results, 1), 10)
-        
-        # Try Brave first
+
         result = await self._search_brave(query, n)
         if not result.startswith("Error:"):
             return result
-        
-        # Fallback to Tavily
+
         result = await self._search_tavily(query, n)
         if not result.startswith("Error:"):
             return result
-        
-        # Final fallback to DuckDuckGo (no API key required)
-        result = await self._search_duckduckgo(query, n)
-        return result
-    
+
+        return await self._search_duckduckgo(query, n)
+
     async def _search_brave(self, query: str, count: int) -> str:
         """Search using Brave Search API."""
         if not self.brave_api_key:
