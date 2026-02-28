@@ -644,3 +644,27 @@ Provider auto-matching is keyword-based (for example, `glm` maps to `zhipu`), wh
 - Updated Custom Provider example to include:
   - `agents.defaults.provider: "custom"`
 - Added note explaining when explicit provider is recommended.
+
+---
+
+# Hotfix: `/new` command ignores `memory_consolidation` flag
+
+**Date**: 2026-02-28
+**Branch**: `hotfix/new-session-ignores-memory-consolidation-flag`
+
+## Problem
+
+Two bugs in the `/new` command handler:
+
+1. **Memory archival runs even when `memory_consolidation: false`** — The `/new` handler unconditionally called `_consolidate_memory(archive_all=True)`, triggering an expensive LLM call to summarize the entire session into MEMORY.md/HISTORY.md. This happened regardless of the user's `memory_consolidation` setting, wasting tokens and adding ~60s latency on large sessions.
+
+2. **Failed archival blocks session reset** — If the LLM consolidation failed (e.g. the model didn't call `save_memory`), the handler returned early with "Memory archival failed, session not cleared." The user was stuck unable to start a new session.
+
+## Fix
+
+- **Respect the flag**: Wrap the LLM consolidation block in `if self.memory_consolidation:` so it only runs when explicitly enabled.
+- **Never block session reset**: If consolidation fails, log a warning but proceed with archiving the session file and starting a fresh session. The user sees a note that consolidation failed but still gets their new session.
+
+## Files Changed
+
+- `nanobot/agent/loop.py`: `/new` command handler in `_process_message()`
