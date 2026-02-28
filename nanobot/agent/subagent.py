@@ -143,6 +143,8 @@ class SubagentManager:
             final_result: str | None = None
             token_usage: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0, "cached": 0}
             total_cost: float = 0.0
+            last_model_used = self.model
+            last_provider_used: str | None = None
             
             while iteration < max_iterations:
                 iteration += 1
@@ -154,7 +156,15 @@ class SubagentManager:
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                 )
+                if response.model:
+                    last_model_used = response.model
+                if response.provider:
+                    last_provider_used = response.provider
                 llm_usage: dict[str, Any] = {"event": "llm_usage", "iteration": iteration}
+                if response.model:
+                    llm_usage["model"] = response.model
+                if response.provider:
+                    llm_usage["provider"] = response.provider
                 has_usage_data = False
                 if response.usage:
                     prompt_tokens = response.usage.get("prompt_tokens", 0)
@@ -256,7 +266,9 @@ class SubagentManager:
                 final_result = "Task completed but no final response was generated."
             
             logger.info("Subagent [{}] completed successfully", task_id)
-            token_summary = self._build_token_summary(token_usage, total_cost)
+            token_summary = self._build_token_summary(
+                token_usage, total_cost, model=last_model_used, provider=last_provider_used,
+            )
             self._log_subagent_event(
                 task_id,
                 {
@@ -271,7 +283,14 @@ class SubagentManager:
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
-            token_summary = self._build_token_summary(token_usage, total_cost) if "token_usage" in locals() else None
+            token_summary = (
+                self._build_token_summary(
+                    token_usage, total_cost,
+                    model=last_model_used if "last_model_used" in locals() else None,
+                    provider=last_provider_used if "last_provider_used" in locals() else None,
+                )
+                if "token_usage" in locals() else None
+            )
             self._log_subagent_event(
                 task_id,
                 {
@@ -379,7 +398,13 @@ When you have completed the task, provide a clear summary of your findings or ac
         except Exception as e:
             logger.warning(f"Subagent [{task_id}] log write failed: {e}")
 
-    def _build_token_summary(self, token_usage: dict[str, int], total_cost: float) -> dict[str, Any] | None:
+    def _build_token_summary(
+        self,
+        token_usage: dict[str, int],
+        total_cost: float,
+        model: str | None = None,
+        provider: str | None = None,
+    ) -> dict[str, Any] | None:
         """Build a compact token/cost summary for subagent logs."""
         if token_usage["total"] <= 0 and token_usage["cached"] <= 0 and total_cost <= 0:
             return None
@@ -388,6 +413,10 @@ When you have completed the task, provide a clear summary of your findings or ac
             "completion": token_usage["completion"],
             "total": token_usage["total"],
         }
+        if model:
+            summary["model"] = model
+        if provider:
+            summary["provider"] = provider
         if token_usage["cached"] > 0:
             summary["cached_tokens"] = token_usage["cached"]
         if total_cost > 0:

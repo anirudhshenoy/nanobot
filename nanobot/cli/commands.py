@@ -283,6 +283,41 @@ def _make_provider(config: Config):
     )
 
 
+def _make_subagent_provider(config: Config):
+    """Create a dedicated provider for subagents if configured, else return (None, None)."""
+    from nanobot.providers.litellm_provider import LiteLLMProvider
+
+    sa_cfg = config.agents.subagents
+    sa_model = sa_cfg.model
+    if not sa_model:
+        return None, None
+
+    sa_provider_name = Config._normalize_provider_name(sa_cfg.provider) or config.get_provider_name(sa_model)
+    sa_provider_cfg = (
+        config.get_provider_by_name(sa_provider_name) if sa_provider_name
+        else config.get_provider(sa_model)
+    )
+    if not sa_provider_cfg or (not sa_provider_cfg.api_key and not sa_model.startswith("bedrock/")):
+        console.print(
+            f"[yellow]Warning: subagent provider/model ({sa_cfg.provider or 'auto'}/{sa_model}) "
+            f"has no API key; subagents will fall back to the main agent's provider.[/yellow]"
+        )
+        return None, None
+
+    api_base = (
+        config.get_api_base_for_provider(sa_provider_name, sa_model) if sa_provider_name
+        else config.get_api_base(sa_model)
+    )
+    provider = LiteLLMProvider(
+        api_key=sa_provider_cfg.api_key or None,
+        api_base=api_base,
+        default_model=sa_model,
+        extra_headers=sa_provider_cfg.extra_headers,
+        provider_name=sa_provider_name,
+    )
+    return provider, sa_model
+
+
 # ============================================================================
 # Gateway / Server
 # ============================================================================
@@ -319,6 +354,7 @@ def gateway(
     cron = CronService(cron_store_path)
     
     # Create agent with cron service
+    sa_provider, sa_model = _make_subagent_provider(config)
     agent = AgentLoop(
         bus=bus,
         provider=provider,
@@ -337,6 +373,8 @@ def gateway(
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        subagent_provider=sa_provider,
+        subagent_model=sa_model,
     )
     
     # Set cron callback (needs agent)
@@ -475,6 +513,7 @@ def agent(
     else:
         logger.disable("nanobot")
     
+    sa_provider, sa_model = _make_subagent_provider(config)
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
@@ -492,6 +531,8 @@ def agent(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        subagent_provider=sa_provider,
+        subagent_model=sa_model,
     )
     
     # Show spinner when logs are off (no output to miss); skip when logs are on
@@ -968,6 +1009,7 @@ def cron_run(
     config = load_config()
     provider = _make_provider(config)
     bus = MessageBus()
+    sa_provider, sa_model = _make_subagent_provider(config)
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
@@ -983,6 +1025,8 @@ def cron_run(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        subagent_provider=sa_provider,
+        subagent_model=sa_model,
     )
 
     store_path = get_data_dir() / "cron" / "jobs.json"

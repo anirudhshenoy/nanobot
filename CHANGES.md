@@ -668,3 +668,44 @@ Two bugs in the `/new` command handler:
 ## Files Changed
 
 - `nanobot/agent/loop.py`: `/new` command handler in `_process_message()`
+
+## Configurable Subagent Provider and Model (2026-02-26)
+
+### Goal
+Allow subagents to use a different provider and model than the main agent, configured via `agents.subagents` in config.
+
+### Why
+Subagents handle focused background tasks and don't need the same expensive model as the main agent. Configuring a cheaper/faster model for subagents reduces cost without affecting main agent quality.
+
+### What Changed
+
+#### File: `nanobot/config/schema.py`
+
+- Added `SubagentDefaults` config class with optional `model` and `provider` fields.
+- Added `agents.subagents` section to `AgentsConfig` (defaults to no override — falls back to main agent's provider/model).
+
+#### File: `nanobot/agent/loop.py`
+
+- Added `subagent_provider` and `subagent_model` parameters to `AgentLoop.__init__`.
+- `SubagentManager` now receives the subagent-specific provider/model when configured, otherwise falls back to the main agent's provider/model.
+
+#### File: `nanobot/cli/commands.py`
+
+- Added `_make_subagent_provider()` helper that creates a dedicated `LiteLLMProvider` for subagents when `agents.subagents.model` is configured. This bypasses model routing so subagents always use exactly the configured model/provider.
+- Updated all three `AgentLoop` construction sites (gateway, CLI chat, cron run) to pass the subagent provider/model.
+
+### Config Example
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-opus-4-5"
+    },
+    "subagents": {
+      "model": "anthropic/claude-sonnet-4",
+      "provider": "anthropic"
+    }
+  }
+}
+```

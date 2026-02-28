@@ -313,10 +313,18 @@ class ModelRoutingConfig(Base):
     tiers: RoutingTiersConfig = Field(default_factory=RoutingTiersConfig)
 
 
+class SubagentDefaults(Base):
+    """Default configuration for subagents. Falls back to agent defaults when unset."""
+
+    model: str | None = None
+    provider: str | None = None
+
+
 class AgentsConfig(Base):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    subagents: SubagentDefaults = Field(default_factory=SubagentDefaults)
     routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
 
 
