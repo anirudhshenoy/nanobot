@@ -372,28 +372,25 @@ class AgentLoop:
         # Slash commands
         cmd = msg.content.strip().lower()
         if cmd == "/new":
-            lock = self._get_consolidation_lock(session.key)
-            self._consolidating.add(session.key)
-            try:
-                async with lock:
-                    snapshot = session.messages[session.last_consolidated:]
-                    if snapshot:
-                        temp = Session(key=session.key)
-                        temp.messages = list(snapshot)
-                        if not await self._consolidate_memory(temp, archive_all=True):
-                            return OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content="Memory archival failed, session not cleared. Please try again.",
-                            )
-            except Exception:
-                logger.exception("/new archival failed for {}", session.key)
-                return OutboundMessage(
-                    channel=msg.channel, chat_id=msg.chat_id,
-                    content="Memory archival failed, session not cleared. Please try again.",
-                )
-            finally:
-                self._consolidating.discard(session.key)
-                self._prune_consolidation_lock(session.key, lock)
+            consolidation_ok = True
+            if self.memory_consolidation:
+                lock = self._get_consolidation_lock(session.key)
+                self._consolidating.add(session.key)
+                try:
+                    async with lock:
+                        snapshot = session.messages[session.last_consolidated:]
+                        if snapshot:
+                            temp = Session(key=session.key)
+                            temp.messages = list(snapshot)
+                            if not await self._consolidate_memory(temp, archive_all=True):
+                                consolidation_ok = False
+                                logger.warning("/new: memory consolidation failed for {}, proceeding with session reset", session.key)
+                except Exception:
+                    consolidation_ok = False
+                    logger.exception("/new archival failed for {}, proceeding with session reset", session.key)
+                finally:
+                    self._consolidating.discard(session.key)
+                    self._prune_consolidation_lock(session.key, lock)
 
             self.sessions.save(session)
             archive_path = self.sessions.archive_session_file(session.key)
@@ -401,8 +398,9 @@ class AgentLoop:
             self.sessions.save(session)
             self.sessions.invalidate(session.key)
             archive_msg = f" Previous session archived at: {archive_path}" if archive_path else ""
+            warn_msg = " (Note: memory consolidation failed, but session was reset)" if not consolidation_ok else ""
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content=f"New session started.{archive_msg}")
+                                  content=f"New session started.{archive_msg}{warn_msg}")
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands\n/routing [optional query] — Show model routing and fallback info")
